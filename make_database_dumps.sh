@@ -80,8 +80,9 @@ DATABASES=""
 case "$DB_TYPE" in
     postgres|postgresql|pgsql)
         # Fetch non-template, connectable databases, excluding default maintenance db 'postgres'
+        # -X (--no-psqlrc) prevents reading startup files which may output text like "Pager usage is off."
         PSQL_ERR=$(mktemp)
-        DATABASES=$(psql -d "${PGDATABASE:-postgres}" -At -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true AND datname NOT IN ('postgres');" 2>"$PSQL_ERR")
+        DATABASES=$(psql -X -q -d "${PGDATABASE:-postgres}" -At -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true AND datname NOT IN ('postgres');" 2>"$PSQL_ERR")
         PSQL_EXIT=$?
         if [ $PSQL_EXIT -ne 0 ]; then
             echo "ERROR Failed to query PostgreSQL databases using psql (exit code $PSQL_EXIT):" >&2
