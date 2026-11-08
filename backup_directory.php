@@ -23,7 +23,7 @@ $optionalArgumentDefaults = [
     'directory_timelies_to_keep_count_default' => 5,
     'directory_dailies_to_keep_count_default' => 7,
     'directory_monthlies_to_keep_count_default' => 6,
-    'directory_yearlies_to_keep_count_default' => null,
+    'directory_yearlies_to_keep_count_default' => 'all',
     'verbose_default' => false,
     'debugging_default' => false,
 ];
@@ -60,6 +60,27 @@ foreach ($optionalArgumentDefaults as $a => $ad) {
         ${$varName} = $envSettings[strtolower($varName)];
     } else {
         ${$varName} = $ad;
+    }
+}
+
+$retentionVariables = [
+    'directory_timelies_to_keep_count',
+    'directory_dailies_to_keep_count',
+    'directory_monthlies_to_keep_count',
+    'directory_yearlies_to_keep_count',
+];
+foreach ($retentionVariables as $rv) {
+    if (isset(${$rv})) {
+        $trimmed = is_string(${$rv}) ? strtolower(trim(${$rv})) : ${$rv};
+        if ($trimmed === 'all' || $trimmed === '-1') {
+            ${$rv} = -1; // -1 represents keep all / unlimited
+        } elseif (is_numeric($trimmed)) {
+            ${$rv} = max(0, (int)$trimmed);
+        } else {
+            ${$rv} = 0;
+        }
+    } else {
+        ${$rv} = 0;
     }
 }
 
@@ -173,83 +194,93 @@ if (is_dir($subject)) {
 
 $deleteCount = 0;
 
-// Make sure there is a yearly for the current year
-$yearlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Y') . '.tgz';
-if (!is_file($yearlyFilepath)) {
-    if ($verbose || $debugging || date('md') !== '0101') {
-        echo 'NOTICE Yearly "' . $yearlyFilepath . '" not found, so copying ' . $destination_path_for_backup
-            . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $yearlyFilepath . "\n";
-    }
-    copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $yearlyFilepath);
-}
-
-// Make sure there is a monthly for the current month
-$monthlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ym') . '.tgz';
-if (!is_file($monthlyFilepath)) {
-    if ($verbose || $debugging || date('d') !== '01') {
-        echo 'NOTICE Monthly "' . $monthlyFilepath . '" not found, so copying ' . $destination_path_for_backup
-            . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $monthlyFilepath . "\n";
-    }
-    copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $monthlyFilepath);
-}
-
-// Copy every new tarball to the daily so that the daily will have the latest/last for the day
-$dailyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ymd') . '.tgz';
-if ($debugging) {
-    echo 'DEBUG Copying ' . $destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename . ' to '
-        . $dailyFilepath . "\n";
-}
-copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $dailyFilepath);
-
-// Delete timelies that are past retention
-if ($directory_timelies_to_keep_count) {
-    $timeliesFilepaths = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_*_*.tgz');
-    arsort($timeliesFilepaths);
-
-    $i = 0;
-    foreach ($timeliesFilepaths as $filepath) {
-        $i++;
-        if ($debugging) {
-            echo 'DEBUG Should delete filename: "' . basename($filepath) . '" (' . $i . ")?\n";
+// Make sure there is a yearly for the current year (if yearlies enabled)
+if ($directory_yearlies_to_keep_count !== 0) {
+    $yearlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Y') . '.tgz';
+    if (!is_file($yearlyFilepath)) {
+        if ($verbose || $debugging || date('md') !== '0101') {
+            echo 'NOTICE Yearly "' . $yearlyFilepath . '" not found, so copying ' . $destination_path_for_backup
+                . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $yearlyFilepath . "\n";
         }
-        if ($i > $directory_timelies_to_keep_count) {
-            if (is_file($filepath)) {
-                if ($verbose || $debugging) {
-                    echo 'NOTICE Deleting old "timely" tarball: ' . $filepath . "\n";
-                }
-                if (!$debugging) {
-                    $deleteCount += (int)(unlink($filepath));
-                }
-            } elseif ($debugging) {
-                echo 'DEBUG File: ' . $filepath . " not found\n";
-            }
-        } elseif ($debugging || $verbose) {
-            echo 'Okay, this file (' . $filepath . ") is okay to keep for now\n";
-        }
+        copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $yearlyFilepath);
     }
 }
 
-// Then delete all the dailies that are past retention
-if ($directory_dailies_to_keep_count) {
-    for ($i = $directory_dailies_to_keep_count; $i < ($directory_dailies_to_keep_count + 30); $i++) {
-        $tempDate = date('Ymd', strtotime('-' . $i . ' day'));
-        $tempFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . $tempDate . '.tgz';
-        if (is_file($tempFilepath)) {
+// Make sure there is a monthly for the current month (if monthlies enabled)
+if ($directory_monthlies_to_keep_count !== 0) {
+    $monthlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ym') . '.tgz';
+    if (!is_file($monthlyFilepath)) {
+        if ($verbose || $debugging || date('d') !== '01') {
+            echo 'NOTICE Monthly "' . $monthlyFilepath . '" not found, so copying ' . $destination_path_for_backup
+                . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $monthlyFilepath . "\n";
+        }
+        copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $monthlyFilepath);
+    }
+}
+
+// Copy every new tarball to the daily so that the daily will have the latest/last for the day (if dailies enabled)
+if ($directory_dailies_to_keep_count !== 0) {
+    $dailyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ymd') . '.tgz';
+    if ($debugging) {
+        echo 'DEBUG Copying ' . $destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename . ' to '
+            . $dailyFilepath . "\n";
+    }
+    copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $dailyFilepath);
+}
+
+// Helper to purge files exceeding keep count
+$purgeBackupFiles = function (array $files, int $keepCount, string $label) use (&$deleteCount, $verbose, $debugging) {
+    if ($keepCount === -1) {
+        return; // -1 means keep all / unlimited
+    }
+    rsort($files);
+    $toDelete = ($keepCount === 0) ? $files : array_slice($files, $keepCount);
+    foreach ($toDelete as $filepath) {
+        if (is_file($filepath)) {
             if ($verbose || $debugging) {
-                echo 'NOTICE Deleting old backup file: ' . $tempFilepath . "\n";
+                echo 'NOTICE Deleting old ' . $label . ' backup file: ' . $filepath . "\n";
             }
             if (!$debugging) {
-                $deleteCount += (int)(unlink($tempFilepath));
+                $deleteCount += (int)unlink($filepath);
             }
-        } elseif ($debugging && $verbose) {
-            echo 'DEBUG File: ' . $tempFilepath . " not found\n";
         }
+    }
+};
+
+// Purge timelies (format: <subject>_YYYYMMDD_HHMM.tgz)
+if ($directory_timelies_to_keep_count !== -1) {
+    $timeliesFilepaths = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject
+        . '_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9].tgz');
+    if ($timeliesFilepaths) {
+        $purgeBackupFiles($timeliesFilepaths, $directory_timelies_to_keep_count, 'timely');
     }
 }
 
-// TODO FINISH THIS!!! Notice script is expected to run daily
-// TODO Delete monthlies that are past retention (when directory_monthlies_to_keep_count not 0)
-// TODO Delete yearlies that are past retention (when directory_yearlies_to_keep_count not 0)
+// Purge dailies (format: <subject>_YYYYMMDD.tgz)
+if ($directory_dailies_to_keep_count !== -1) {
+    $dailyFiles = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject
+        . '_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].tgz');
+    if ($dailyFiles) {
+        $purgeBackupFiles($dailyFiles, $directory_dailies_to_keep_count, 'daily');
+    }
+}
+
+// Purge monthlies (format: <subject>_YYYYMM.tgz)
+if ($directory_monthlies_to_keep_count !== -1) {
+    $monthlyFiles = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject
+        . '_[0-9][0-9][0-9][0-9][0-9][0-9].tgz');
+    if ($monthlyFiles) {
+        $purgeBackupFiles($monthlyFiles, $directory_monthlies_to_keep_count, 'monthly');
+    }
+}
+
+// Purge yearlies (format: <subject>_YYYY.tgz)
+if ($directory_yearlies_to_keep_count !== -1) {
+    $yearlyFiles = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_[0-9][0-9][0-9][0-9].tgz');
+    if ($yearlyFiles) {
+        $purgeBackupFiles($yearlyFiles, $directory_yearlies_to_keep_count, 'yearly');
+    }
+}
 
 if ($verbose) {
     if ($deleteCount > 0) {

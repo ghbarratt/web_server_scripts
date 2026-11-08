@@ -13,11 +13,56 @@ if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     echo "Supported engines: PostgreSQL, MariaDB, MySQL (auto-detected if DB_TYPE is unset)."
     echo ""
     echo "Environment variables (or configured via .env):"
-    echo "  DESTINATION_PATH_FOR_BACKUP  Destination directory (default: /var/www/backup)"
-    echo "  DB_TYPE                      Explicitly set engine: 'postgres', 'mariadb', or 'mysql'"
-    echo "  PG*                          Standard PostgreSQL connection parameters (PGHOST, PGPORT, PGUSER, PGDATABASE, etc.)"
+    echo "  DESTINATION_PATH_FOR_BACKUP       Destination directory (default: /var/www/backup)"
+    echo "  DB_TYPE                           Explicitly set engine: 'postgres', 'mariadb', or 'mysql'"
+    echo "  DATABASE_DAILIES_TO_KEEP_COUNT    Daily backups to keep (default: 7, 0=disable, all=unlimited)"
+    echo "  DATABASE_MONTHLIES_TO_KEEP_COUNT  Monthly backups to keep (default: 6, 0=disable, all=unlimited)"
+    echo "  DATABASE_YEARLIES_TO_KEEP_COUNT   Yearly backups to keep (default: all, 0=disable, all=unlimited)"
+    echo "  PG*                               Standard PostgreSQL connection parameters (PGHOST, PGPORT, PGUSER, PGDATABASE, etc.)"
     exit 0
 fi
+
+# Normalize retention count: returns integer >= 0, or -1 for 'all' / unlimited
+parse_retention() {
+    local val="${1,,}"
+    val="${val//\"/}"
+    val="${val//\'/}"
+    val="$(echo "${val}" | tr -d "[:space:]")"
+    if [[ "$val" == "all" || "$val" == "-1" ]]; then
+        echo -1
+    elif [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+    else
+        echo 0
+    fi
+}
+
+# Purge backups exceeding retention count
+purge_db_files() {
+    local pattern="$1"
+    local keep_count="$2"
+    local label="$3"
+
+    [ "$keep_count" -eq -1 ] && return 0 # Keep all
+
+    local files=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && [ -f "$f" ] && files+=("$f")
+    done < <(ls -1d $pattern 2>/dev/null | sort -r)
+
+    local total="${#files[@]}"
+    if [ "$keep_count" -eq 0 ]; then
+        for (( i=0; i<total; i++ )); do
+            echo "NOTICE Deleting $label backup (retention 0): ${files[i]}"
+            rm -f "${files[i]}"
+        done
+    elif [ "$total" -gt "$keep_count" ]; then
+        for (( i=keep_count; i<total; i++ )); do
+            echo "NOTICE Deleting old $label backup: ${files[i]}"
+            rm -f "${files[i]}"
+        done
+    fi
+}
 
 # Load optional .env from script directory if present
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +93,10 @@ fi
 
 DATE=$(date +%Y%m%d)
 DESTINATION_PATH_FOR_BACKUP="${1:-${DESTINATION_PATH_FOR_BACKUP:-/var/www/backup}}"
+
+DATABASE_DAILIES_TO_KEEP_COUNT=$(parse_retention "${DATABASE_DAILIES_TO_KEEP_COUNT:-${DATABASE_DAILIES_TO_KEEP_COUNT_DEFAULT:-7}}")
+DATABASE_MONTHLIES_TO_KEEP_COUNT=$(parse_retention "${DATABASE_MONTHLIES_TO_KEEP_COUNT:-${DATABASE_MONTHLIES_TO_KEEP_COUNT_DEFAULT:-6}}")
+DATABASE_YEARLIES_TO_KEEP_COUNT=$(parse_retention "${DATABASE_YEARLIES_TO_KEEP_COUNT:-${DATABASE_YEARLIES_TO_KEEP_COUNT_DEFAULT:-all}}")
 
 # Ensure backup directory exists and enter it
 mkdir -p "$DESTINATION_PATH_FOR_BACKUP" || {
@@ -142,15 +191,12 @@ for db in $DATABASES; do
     dump_file="${db}_${DATE}.sql"
     echo "INFO Dumping database: $db -> $dump_file"
 
+    dump_success=0
     case "$DB_TYPE" in
         postgres|postgresql|pgsql)
             # Use --clean --if-exists for clean DROP TABLE IF EXISTS statements
             if pg_dump --clean --if-exists "$db" > "$dump_file"; then
-                echo "INFO Successfully dumped $db"
-            else
-                echo "ERROR Failed to dump PostgreSQL database $db" >&2
-                rm -f "$dump_file" 2>/dev/null
-                ERRORS=$((ERRORS + 1))
+                dump_success=1
             fi
             ;;
 
@@ -160,24 +206,57 @@ for db in $DATABASES; do
                 DUMP_CMD="mysqldump"
             fi
             if "$DUMP_CMD" "$db" > "$dump_file"; then
-                echo "INFO Successfully dumped $db"
-            else
-                echo "ERROR Failed to dump MariaDB database $db" >&2
-                rm -f "$dump_file" 2>/dev/null
-                ERRORS=$((ERRORS + 1))
+                dump_success=1
             fi
             ;;
 
         mysql)
             if mysqldump "$db" > "$dump_file"; then
-                echo "INFO Successfully dumped $db"
-            else
-                echo "ERROR Failed to dump MySQL database $db" >&2
-                rm -f "$dump_file" 2>/dev/null
-                ERRORS=$((ERRORS + 1))
+                dump_success=1
             fi
             ;;
     esac
+
+    if [ $dump_success -eq 1 ]; then
+        echo "INFO Successfully dumped $db"
+
+        # Create yearly backup if enabled and not yet created for this year (.sql.gz)
+        if [ "$DATABASE_YEARLIES_TO_KEEP_COUNT" -ne 0 ]; then
+            YEAR=$(date +%Y)
+            YEARLY_FILE="${db}_${YEAR}.sql.gz"
+            if [ ! -f "$YEARLY_FILE" ]; then
+                echo "INFO Creating yearly backup: $YEARLY_FILE"
+                gzip -c -9 "$dump_file" > "$YEARLY_FILE"
+            fi
+        fi
+
+        # Create monthly backup if enabled and not yet created for this month (.sql.gz)
+        if [ "$DATABASE_MONTHLIES_TO_KEEP_COUNT" -ne 0 ]; then
+            MONTH=$(date +%Y%m)
+            MONTHLY_FILE="${db}_${MONTH}.sql.gz"
+            if [ ! -f "$MONTHLY_FILE" ]; then
+                echo "INFO Creating monthly backup: $MONTHLY_FILE"
+                gzip -c -9 "$dump_file" > "$MONTHLY_FILE"
+            fi
+        fi
+
+        # Gzip any past uncompressed daily .sql dumps (leaving only today's dump uncompressed)
+        for past_sql in "${db}"_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].sql; do
+            if [ -f "$past_sql" ] && [ "$past_sql" != "$dump_file" ]; then
+                echo "INFO Compressing past daily backup: $past_sql -> ${past_sql}.gz"
+                gzip -9 "$past_sql"
+            fi
+        done
+
+        # Purge backups exceeding retention
+        purge_db_files "${db}_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].sql*" "$DATABASE_DAILIES_TO_KEEP_COUNT" "daily"
+        purge_db_files "${db}_[0-9][0-9][0-9][0-9][0-9][0-9].sql*" "$DATABASE_MONTHLIES_TO_KEEP_COUNT" "monthly"
+        purge_db_files "${db}_[0-9][0-9][0-9][0-9].sql*" "$DATABASE_YEARLIES_TO_KEEP_COUNT" "yearly"
+    else
+        echo "ERROR Failed to dump $DB_TYPE database $db" >&2
+        rm -f "$dump_file" 2>/dev/null
+        ERRORS=$((ERRORS + 1))
+    fi
 done
 
 if [ "$ERRORS" -gt 0 ]; then
