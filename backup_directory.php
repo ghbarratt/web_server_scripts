@@ -3,18 +3,17 @@
 
 require_once 'helpers.php';
 
+$envSettings = [];
 if (is_file(__DIR__ . '/.env')) {
     $envSettings = getArrayFromSettingsFile(__DIR__ . '/.env');
-} else {
-    $envSettings = [];
 }
 
 $optionalArgumentDefaults = [
-    'destination_path_default' => 'backup',
-    'dailies_to_keep_count_default' => 7,
-    'monthlies_to_keep_count_default' => 6,
-    'yearlies_to_keep_count_default' => null,
-    'timelies_to_keep_count_default' => 5,
+    'destination_path_for_backup_default' => 'backup',
+    'directory_timelies_to_keep_count_default' => 5,
+    'directory_dailies_to_keep_count_default' => 7,
+    'directory_monthlies_to_keep_count_default' => 6,
+    'directory_yearlies_to_keep_count_default' => null,
     'verbose_default' => false,
     'debugging_default' => false,
 ];
@@ -46,7 +45,7 @@ foreach ($optionalArgumentDefaults as $a => $ad) {
         ${$varName} = constant(strtoupper($a));
     } elseif (array_key_exists(strtolower($a), $envSettings)) {
         ${$varName} = $envSettings[strtolower($a)];
-    } elseif (array_key_exists(strtolower($a), $varName)) {
+    } elseif (array_key_exists($varName, $envSettings)) {
         ${$varName} = $envSettings[strtolower($varName)];
     } else {
         ${$varName} = $ad;
@@ -62,7 +61,7 @@ foreach ($boolArguments as $ba) {
     }
 }
 
-$destination_path = rtrim($destination_path, DIRECTORY_SEPARATOR);
+$destination_path_for_backup = rtrim($destination_path_for_backup, DIRECTORY_SEPARATOR);
 
 if (!is_bool($verbose)) {
     if (strtolower($verbose[0]) == 'v' || strtolower($verbose[0]) == 'y' || strtolower($verbose[0]) == 't') {
@@ -104,7 +103,7 @@ if (is_link($lastDirectory)) {
 
 $tarballFilename = $subject . '_' . $date_appendage . '_' . date('Hi') . '.tgz';
 
-$command = 'tar -czf ' . $destination_path . DIRECTORY_SEPARATOR . $tarballFilename . ' ' . $subject;
+$command = 'tar -czf ' . $destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename . ' ' . $subject;
 
 
 if ($debugging) {
@@ -124,7 +123,8 @@ if (is_dir($subject)) {
         echo $new_warning;
         $warnings[] = $new_warning;
     } elseif ($verbose || $debugging) {
-        echo 'NOTICE Successfully created tarball ' . $destination_path . DIRECTORY_SEPARATOR . $tarballFilename . "\n";
+        echo 'NOTICE Successfully created tarball ' . $destination_path_for_backup . DIRECTORY_SEPARATOR
+            . $tarballFilename . "\n";
     }
 } else {
     $new_warning = 'WARNING Subject "' . $subject . '" is not a directory' . "\n";
@@ -132,34 +132,39 @@ if (is_dir($subject)) {
     $warnings[] = $new_warning;
 }
 
-$delete_count = 0;
+$deleteCount = 0;
 
 // Make sure there is a yearly for the current year
-$yearlyFilepath = $destination_path . DIRECTORY_SEPARATOR . $subject . '_' . date('Y') . '.tgz';
+$yearlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Y') . '.tgz';
 if (!is_file($yearlyFilepath)) {
-    echo 'NOTICE Yearly "' . $yearlyFilepath . '" not found, so copying ' . $destination_path . DIRECTORY_SEPARATOR
-        . $tarballFilename . ' to ' . $yearlyFilepath . "\n";
-    copy($destination_path . DIRECTORY_SEPARATOR . $tarballFilename, $yearlyFilepath);
+    if ($verbose || $debugging || date('md') !== '0101') {
+        echo 'NOTICE Yearly "' . $yearlyFilepath . '" not found, so copying ' . $destination_path_for_backup
+            . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $yearlyFilepath . "\n";
+    }
+    copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $yearlyFilepath);
 }
 
 // Make sure there is a monthly for the current month
-$monthlyFilepath = $destination_path . DIRECTORY_SEPARATOR . $subject . '_' . date('Ym') . '.tgz';
+$monthlyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ym') . '.tgz';
 if (!is_file($monthlyFilepath)) {
-    echo 'NOTICE Monthly "' . $monthlyFilepath . '" not found, so copying ' . $destination_path . DIRECTORY_SEPARATOR
-        . $tarballFilename . ' to ' . $monthlyFilepath . "\n";
-    copy($destination_path . DIRECTORY_SEPARATOR . $tarballFilename, $monthlyFilepath);
+    if ($verbose || $debugging || date('d') !== '01') {
+        echo 'NOTICE Monthly "' . $monthlyFilepath . '" not found, so copying ' . $destination_path_for_backup
+            . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $monthlyFilepath . "\n";
+    }
+    copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $monthlyFilepath);
 }
 
 // Copy every new tarball to the daily so that the daily will have the latest/last for the day
-$dailyFilepath = $destination_path . DIRECTORY_SEPARATOR . $subject . '_' . date('Ymd') . '.tgz';
+$dailyFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . date('Ymd') . '.tgz';
 if ($debugging) {
-    echo 'DEBUG Copying ' . $destination_path . DIRECTORY_SEPARATOR . $tarballFilename . ' to ' . $dailyFilepath . "\n";
+    echo 'DEBUG Copying ' . $destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename . ' to '
+        . $dailyFilepath . "\n";
 }
-copy($destination_path . DIRECTORY_SEPARATOR . $tarballFilename, $dailyFilepath);
+copy($destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename, $dailyFilepath);
 
 // Delete timelies that are past retention
-if ($timelies_to_keep_count) {
-    $timeliesFilepaths = glob($destination_path . DIRECTORY_SEPARATOR . $subject . '_*_*.tgz');
+if ($directory_timelies_to_keep_count) {
+    $timeliesFilepaths = glob($destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_*_*.tgz');
     arsort($timeliesFilepaths);
 
     $i = 0;
@@ -168,13 +173,13 @@ if ($timelies_to_keep_count) {
         if ($debugging) {
             echo 'DEBUG Should delete filename: "' . basename($filepath) . '" (' . $i . ")?\n";
         }
-        if ($i > $timelies_to_keep_count) {
+        if ($i > $directory_timelies_to_keep_count) {
             if (is_file($filepath)) {
                 if ($verbose || $debugging) {
                     echo 'NOTICE Deleting old "timely" tarball: ' . $filepath . "\n";
                 }
                 if (!$debugging) {
-                    $delete_count += (int)(unlink($filepath));
+                    $deleteCount += (int)(unlink($filepath));
                 }
             } elseif ($debugging) {
                 echo 'DEBUG File: ' . $filepath . " not found\n";
@@ -186,15 +191,15 @@ if ($timelies_to_keep_count) {
 }
 
 // Then delete all the dailies that are past retention
-for ($i = $dailies_to_keep_count; $i < ($dailies_to_keep_count + 30); $i++) {
-    $tmp_date = date('Ymd', strtotime('-' . $i . ' day'));
-    $tempFilepath = $destination_path . DIRECTORY_SEPARATOR . $subject . '_' . $tmp_date . '.tgz';
+for ($i = $directory_dailies_to_keep_count; $i < ($directory_dailies_to_keep_count + 30); $i++) {
+    $tempDate = date('Ymd', strtotime('-' . $i . ' day'));
+    $tempFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . $tempDate . '.tgz';
     if (is_file($tempFilepath)) {
         if ($verbose || $debugging) {
             echo 'NOTICE Deleting old backup file: ' . $tempFilepath . "\n";
         }
         if (!$debugging) {
-            $delete_count += (int)(unlink($tempFilepath));
+            $deleteCount += (int)(unlink($tempFilepath));
         }
     } elseif ($debugging) {
         echo 'DEBUG File: ' . $tempFilepath . " not found\n";
@@ -202,12 +207,12 @@ for ($i = $dailies_to_keep_count; $i < ($dailies_to_keep_count + 30); $i++) {
 }
 
 // TODO FINISH THIS!!! Notice script is expected to run daily
-// TODO Delete monthlies that are past retention (when monthlies_to_keep_count not 0)
-// TODO Delete yearlies that are past retention (when yearlies_to_keep_count not 0)
+// TODO Delete monthlies that are past retention (when directory_monthlies_to_keep_count not 0)
+// TODO Delete yearlies that are past retention (when directory_yearlies_to_keep_count not 0)
 
 if ($verbose) {
-    if ($delete_count > 0) {
-        echo 'NOTICE Successfully deleted ' . $delete_count . " old backup files\n";
+    if ($deleteCount > 0) {
+        echo 'NOTICE Successfully deleted ' . $deleteCount . " old backup files\n";
     } else {
         echo "NOTICE There were no old backup files to delete\n";
     }
@@ -219,7 +224,7 @@ if ($verbose) {
     //if (count($warnings)) {
         //$message = "There were some warnings: \n" . implode("\n", $warnings) . "\n";
     //} else {
-        //$message = 'Successfully backed up ' . $path . ' into ' . $destination_path . DIRECTORY_SEPARATOR
+        //$message = 'Successfully backed up ' . $path . ' into ' . $destination_path_for_backup . DIRECTORY_SEPARATOR
             //. $tarballFilename . "\n";
     //}
 
