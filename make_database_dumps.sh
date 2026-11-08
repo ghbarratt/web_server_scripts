@@ -51,7 +51,7 @@ DESTINATION_PATH_FOR_BACKUP="${1:-${DESTINATION_PATH_FOR_BACKUP:-/var/www/backup
 
 # Ensure backup directory exists and enter it
 mkdir -p "$DESTINATION_PATH_FOR_BACKUP" || {
-    echo "Error: Cannot create or access backup directory: $DESTINATION_PATH_FOR_BACKUP" >&2
+    echo "ERROR Cannot create or access backup directory: $DESTINATION_PATH_FOR_BACKUP" >&2
     exit 1
 }
 cd "$DESTINATION_PATH_FOR_BACKUP" || exit 1
@@ -72,8 +72,8 @@ fi
 # Normalize DB_TYPE
 DB_TYPE=$(echo "$DB_TYPE" | tr '[:upper:]' '[:lower:]')
 
-echo "Using database engine: $DB_TYPE"
-echo "Backup directory: $DESTINATION_PATH_FOR_BACKUP"
+echo "INFO Using database engine: $DB_TYPE"
+echo "INFO Backup directory: $DESTINATION_PATH_FOR_BACKUP"
 
 DATABASES=""
 
@@ -84,7 +84,7 @@ case "$DB_TYPE" in
         DATABASES=$(psql -d "${PGDATABASE:-postgres}" -At -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true AND datname NOT IN ('postgres');" 2>"$PSQL_ERR")
         PSQL_EXIT=$?
         if [ $PSQL_EXIT -ne 0 ]; then
-            echo "Error: Failed to query PostgreSQL databases using psql (exit code $PSQL_EXIT):" >&2
+            echo "ERROR Failed to query PostgreSQL databases using psql (exit code $PSQL_EXIT):" >&2
             cat "$PSQL_ERR" >&2
             rm -f "$PSQL_ERR"
             exit 1
@@ -102,7 +102,7 @@ case "$DB_TYPE" in
         DATABASES=$("$CLIENT_CMD" -N -e "SHOW DATABASES;" 2>"$DB_ERR" | grep -v -E "^(information_schema|performance_schema|mysql|phpmyadmin|sys)$")
         DB_EXIT=$?
         if [ $DB_EXIT -ne 0 ]; then
-            echo "Error: Failed to query MariaDB databases:" >&2
+            echo "ERROR Failed to query MariaDB databases:" >&2
             cat "$DB_ERR" >&2
             rm -f "$DB_ERR"
             exit 1
@@ -115,7 +115,7 @@ case "$DB_TYPE" in
         DATABASES=$(mysql -N -e "SHOW DATABASES;" 2>"$DB_ERR" | grep -v -E "^(information_schema|performance_schema|mysql|phpmyadmin|sys)$")
         DB_EXIT=$?
         if [ $DB_EXIT -ne 0 ]; then
-            echo "Error: Failed to query MySQL databases:" >&2
+            echo "ERROR Failed to query MySQL databases:" >&2
             cat "$DB_ERR" >&2
             rm -f "$DB_ERR"
             exit 1
@@ -124,14 +124,14 @@ case "$DB_TYPE" in
         ;;
 
     *)
-        echo "Error: Unsupported or undetected database engine '$DB_TYPE'." >&2
+        echo "ERROR Unsupported or undetected database engine '$DB_TYPE'." >&2
         echo "Please specify DB_TYPE (postgres, mariadb, or mysql) or verify database tools are installed." >&2
         exit 1
         ;;
 esac
 
 if [ -z "$DATABASES" ]; then
-    echo "Warning: No databases found to dump."
+    echo "WARNING No databases found to dump."
     exit 0
 fi
 
@@ -139,15 +139,15 @@ ERRORS=0
 
 for db in $DATABASES; do
     dump_file="${db}_${DATE}.sql"
-    echo "Dumping database: $db -> $dump_file"
+    echo "INFO Dumping database: $db -> $dump_file"
 
     case "$DB_TYPE" in
         postgres|postgresql|pgsql)
             # Use --clean --if-exists for clean DROP TABLE IF EXISTS statements
             if pg_dump --clean --if-exists "$db" > "$dump_file"; then
-                echo "Successfully dumped $db"
+                echo "INFO Successfully dumped $db"
             else
-                echo "Error: Failed to dump PostgreSQL database $db" >&2
+                echo "ERROR Failed to dump PostgreSQL database $db" >&2
                 rm -f "$dump_file" 2>/dev/null
                 ERRORS=$((ERRORS + 1))
             fi
@@ -159,9 +159,9 @@ for db in $DATABASES; do
                 DUMP_CMD="mysqldump"
             fi
             if "$DUMP_CMD" "$db" > "$dump_file"; then
-                echo "Successfully dumped $db"
+                echo "INFO Successfully dumped $db"
             else
-                echo "Error: Failed to dump MariaDB database $db" >&2
+                echo "ERROR Failed to dump MariaDB database $db" >&2
                 rm -f "$dump_file" 2>/dev/null
                 ERRORS=$((ERRORS + 1))
             fi
@@ -169,9 +169,9 @@ for db in $DATABASES; do
 
         mysql)
             if mysqldump "$db" > "$dump_file"; then
-                echo "Successfully dumped $db"
+                echo "INFO Successfully dumped $db"
             else
-                echo "Error: Failed to dump MySQL database $db" >&2
+                echo "ERROR Failed to dump MySQL database $db" >&2
                 rm -f "$dump_file" 2>/dev/null
                 ERRORS=$((ERRORS + 1))
             fi
@@ -180,8 +180,8 @@ for db in $DATABASES; do
 done
 
 if [ "$ERRORS" -gt 0 ]; then
-    echo "Database backups finished with $ERRORS error(s)." >&2
+    echo "WARNING Database backups finished with $ERRORS error(s)." >&2
     exit 1
 fi
 
-echo "All backups completed successfully!"
+echo "INFO All backups completed successfully!"

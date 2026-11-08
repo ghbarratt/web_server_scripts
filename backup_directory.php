@@ -8,8 +8,18 @@ if (is_file(__DIR__ . '/.env')) {
     $envSettings = getArrayFromSettingsFile(__DIR__ . '/.env');
 }
 
+$destinationPathForBackupDefault = 'backup';
+$pathsToTryForBackupDefault = ['backup', '/var/www/backup'];
+foreach ($pathsToTryForBackupDefault as $p) {
+    if (is_dir($p)) {
+        $destinationPathForBackupDefault = $p;
+        break;
+    }
+}
+
 $optionalArgumentDefaults = [
-    'destination_path_for_backup_default' => 'backup',
+    'destination_path_for_backup_default' => $destinationPathForBackupDefault,
+    'exclude_directories' => [],
     'directory_timelies_to_keep_count_default' => 5,
     'directory_dailies_to_keep_count_default' => 7,
     'directory_monthlies_to_keep_count_default' => 6,
@@ -20,7 +30,8 @@ $optionalArgumentDefaults = [
 
 $usageString = 'Usage: ' . basename(__FILE__) . ' <path>';
 foreach ($optionalArgumentDefaults as $a => $ad) {
-    $usageString .= ' [<' . $a . '>=' . (is_numeric($ad) ? $ad : '"' . $ad . '"') . ']';
+    $usageString .= ' [<' . $a . '>=' . (is_numeric($ad) ? $ad : '"' . (is_array($ad) ? implode(',', $ad) : $ad) . '"')
+        . ']';
 }
 
 if ($argc < 2) {
@@ -52,12 +63,26 @@ foreach ($optionalArgumentDefaults as $a => $ad) {
     }
 }
 
+$arrayArguments = ['exclude_directories'];
+foreach ($arrayArguments as $aa) {
+    if (!is_array(${$aa})) {
+        if (is_string(${$aa})) {
+            ${$aa} = explode(',', ${$aa});
+            ${$aa} = array_map('trim', ${$aa});
+        } elseif (empty($${$aa})) {
+            ${$aa} = [];
+        }
+    }
+}
+
 $boolArguments = ['verbose', 'debugging'];
 foreach ($boolArguments as $ba) {
-    if (in_array(strtolower(${$ba}[0]), ['y', 't', 'v'])) {
-        ${$ba} = true;
-    } else {
-        ${$ba} = false;
+    if (!is_bool(${$ba})) {
+        if (in_array(strtolower(${$ba}[0]), ['y', 't', 'v'])) {
+            ${$ba} = true;
+        } else {
+            ${$ba} = false;
+        }
     }
 }
 
@@ -103,14 +128,28 @@ if (is_link($lastDirectory)) {
 
 $tarballFilename = $subject . '_' . $date_appendage . '_' . date('Hi') . '.tgz';
 
-$command = 'tar -czf ' . $destination_path_for_backup . DIRECTORY_SEPARATOR . $tarballFilename . ' ' . $subject;
-
-
 if ($debugging) {
     echo 'DEBUG lastDirectory: ' . $lastDirectory . "\n";
     echo 'DEBUG CWD: ' . getcwd() . "\n";
     echo 'DEBUG tarball filename: ' . $tarballFilename . "\n";
-    echo 'DEBUG command: ' . $command . "\n";
+}
+
+// Excludes must be relative when the path is, and we basically always make the path relative
+foreach ($exclude_directories as &$ed) {
+    $ed = rtrim(str_replace($path . DIRECTORY_SEPARATOR, '', $ed), DIRECTORY_SEPARATOR);
+}
+
+if (!empty($exclude_directories)) {
+    $exclusionsArgString = " --exclude='" . implode("' --exclude='", $exclude_directories) . "'";
+} else {
+    $exclusionsArgString = '';
+}
+
+$command = 'tar' . $exclusionsArgString . ' -czf ' . $destination_path_for_backup . DIRECTORY_SEPARATOR
+    . $tarballFilename . ' ' . $subject;
+
+if ($debugging || $verbose || !empty($exclusionArgSting)) {
+    echo 'NOTICE Command is "' . $command . "\"\n";
 }
 
 if (is_dir($subject)) {
@@ -191,18 +230,20 @@ if ($directory_timelies_to_keep_count) {
 }
 
 // Then delete all the dailies that are past retention
-for ($i = $directory_dailies_to_keep_count; $i < ($directory_dailies_to_keep_count + 30); $i++) {
-    $tempDate = date('Ymd', strtotime('-' . $i . ' day'));
-    $tempFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . $tempDate . '.tgz';
-    if (is_file($tempFilepath)) {
-        if ($verbose || $debugging) {
-            echo 'NOTICE Deleting old backup file: ' . $tempFilepath . "\n";
+if ($directory_dailies_to_keep_count) {
+    for ($i = $directory_dailies_to_keep_count; $i < ($directory_dailies_to_keep_count + 30); $i++) {
+        $tempDate = date('Ymd', strtotime('-' . $i . ' day'));
+        $tempFilepath = $destination_path_for_backup . DIRECTORY_SEPARATOR . $subject . '_' . $tempDate . '.tgz';
+        if (is_file($tempFilepath)) {
+            if ($verbose || $debugging) {
+                echo 'NOTICE Deleting old backup file: ' . $tempFilepath . "\n";
+            }
+            if (!$debugging) {
+                $deleteCount += (int)(unlink($tempFilepath));
+            }
+        } elseif ($debugging && $verbose) {
+            echo 'DEBUG File: ' . $tempFilepath . " not found\n";
         }
-        if (!$debugging) {
-            $deleteCount += (int)(unlink($tempFilepath));
-        }
-    } elseif ($debugging) {
-        echo 'DEBUG File: ' . $tempFilepath . " not found\n";
     }
 }
 
